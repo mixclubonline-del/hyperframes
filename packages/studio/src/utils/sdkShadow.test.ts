@@ -108,6 +108,20 @@ describe("sdkShadowDispatch (integration)", () => {
     expect(session.getElement("hf-box")?.inlineStyles.color).toBe("#00f");
   });
 
+  it("does NOT false-mismatch a hyphenated style property (kebab op vs camelCase snapshot)", async () => {
+    const { sdkShadowDispatch } = await import("./sdkShadow");
+    const session = await openComposition(BASE_HTML);
+
+    const ops: PatchOperation[] = [
+      { type: "inline-style", property: "background-color", value: "rgb(255, 79, 88)" },
+    ];
+    const result = sdkShadowDispatch(session, "hf-box", ops);
+
+    expect(result.dispatched).toBe(true);
+    expect(result.mismatches).toHaveLength(0); // was 1 before the kebab→camel read-back fix
+    expect(session.getElement("hf-box")?.inlineStyles.backgroundColor).toBe("rgb(255, 79, 88)");
+  });
+
   it("returns dispatched:false when hfId not found in session", async () => {
     const { sdkShadowDispatch } = await import("./sdkShadow");
     const session = await openComposition(BASE_HTML);
@@ -141,6 +155,21 @@ describe("sdkShadowDispatch (integration)", () => {
     sdkShadowDispatch(session, "hf-box", ops);
 
     expect(session.getElement("hf-box")?.attributes["data-name"]).toBe("hero");
+  });
+
+  // fallow-ignore-next-line code-duplication
+  it("does NOT false-mismatch studio-internal data-hf-* marker attributes", async () => {
+    const { sdkShadowDispatch } = await import("./sdkShadow");
+    const session = await openComposition(BASE_HTML);
+
+    // path-offset drags emit these already-data-prefixed, SDK-excluded markers.
+    const ops: PatchOperation[] = [
+      { type: "attribute", property: "data-hf-studio-path-offset", value: "true" },
+    ];
+    const result = sdkShadowDispatch(session, "hf-box", ops);
+
+    expect(result.dispatched).toBe(true);
+    expect(result.mismatches).toHaveLength(0); // filtered, not double-prefixed + flagged
   });
 
   it("returns dispatch_error when dispatch throws — does not propagate", async () => {
@@ -300,6 +329,21 @@ window.__timelines["t"] = tl;`;
 tl.to("[data-hf-id=\\"hf-box\\"]", { opacity: "1", duration: 0.5 }, 0);
 window.__timelines["t"] = tl;`;
     expect(gsapFidelityMismatches(numeric, stringy)).toEqual([]);
+  });
+
+  it("matches the same element across different selector forms when a resolver is given", () => {
+    // SDK writes [data-hf-id="hf-x"], server writes .x — same element, same tween.
+    const sdk = `var tl = gsap.timeline({ paused: true });
+tl.to("[data-hf-id=\\"hf-x\\"]", { x: 200, duration: 0.8 }, 0.5);
+window.__timelines["t"] = tl;`;
+    const server = `var tl = gsap.timeline({ paused: true });
+tl.to(".x", { x: 200, duration: 0.8 }, 0.5);
+window.__timelines["t"] = tl;`;
+    const resolve = (sel: string) => (/hf-x|\.x/.test(sel) ? "hf-x" : sel);
+    // Without a resolver: selector-form divergence → present/absent mismatch.
+    expect(gsapFidelityMismatches(sdk, server).length).toBeGreaterThan(0);
+    // With a resolver: matched by element → no mismatch.
+    expect(gsapFidelityMismatches(sdk, server, resolve)).toEqual([]);
   });
 });
 
